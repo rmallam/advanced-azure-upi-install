@@ -1,3 +1,12 @@
+# Pre Requisites
+
+## CL's
+az
+yq
+jq
+openshift-install binary
+Download installation program from cloud.redhat.com --> Clusters --> new cluster
+
 # azure credentials
 az login
 
@@ -13,29 +22,51 @@ az ad app permission grant --id <appId> --api 00000002-0000-0000-c000-0000000000
 
 # Download installation program from cloud.redhat.com --> Clusters --> new cluster
 
-export installdir=azureocp
+export installdir=azureocp1
+
+mkdir $installdir
 
 # Create install config
 openshift-install create install-config --dir=${installdir}
 
-export CLUSTER_NAME=ocpupi
-export AZURE_REGION=australiasoutheast
-export SSH_KEY=`cat ~/.ssh/id_rsa`
-export BASE_DOMAIN=themallams.com
-export BASE_DOMAIN_RESOURCE_GROUP=aks-resource-group
+## Note: to use OVN network type, update install-config.yaml , Change networkType: from openshiftSDN to OVNKubernetes
+
+export CLUSTER_NAME=`yq e '.metadata.name' ${installdir}/install-config.yaml`
+export AZURE_REGION=`yq e '.platform.azure.region' ${installdir}/install-config.yaml`
+export SSH_KEY=`yq e '.sshKey' ${installdir}/install-config.yaml`
+export BASE_DOMAIN=`yq e '.baseDomain' ${installdir}/install-config.yaml`
+export BASE_DOMAIN_RESOURCE_GROUP=`yq e '.platform.azure.baseDomainResourceGroupName'  ${installdir}/install-config.yaml`
 
 export KUBECONFIG=${installdir}/auth/kubeconfig   
 
 # Create Kube manifest files
-openshift-install create manifests --dir=${installdir}    
+openshift-install create manifests --dir=${installdir}  
+
+# To enable ipsec with OVNKubernetes -- This cant be performed after cluster install
+cat <<EOF > manifests/cluster-network-03-config.yml
+apiVersion: operator.openshift.io/v1
+kind: Network
+metadata:
+  name: cluster
+spec:
+  defaultNetwork:
+    type: OVNKubernetes
+    ovnKubernetesConfig:
+      ipsecConfig: {}
+      mtu: 1400
+EOF
 
 rm -rf ${installdir}/openshift/99_openshift-cluster-api_master-machines-*.yaml 
 rm -rf ${installdir}/openshift/99_openshift-cluster-api_worker-machineset-*.yaml
 
 
-export INFRA_ID=`grep infrastructureName  ${installdir}/manifests/cluster-infrastructure-02-config.yml | awk -F ':' '{print $2}'`
+export INFRA_ID=`grep infrastructureName  ${installdir}/manifests/cluster-infrastructure-02-config.yml | awk -F ':' '{print $2}'  | xargs `
 
-export RESOURCE_GROUP=`grep resourceGroupName  ${installdir}/manifests/cluster-infrastructure-02-config.yml | awk -F ':' '{print $2}'`
+export RESOURCE_GROUP=`grep resourceGroupName  ${installdir}/manifests/cluster-infrastructure-02-config.yml | awk -F ':' '{print $2}'  | xargs`
+
+echo $INFRA_ID
+
+echo $RESOURCE_GROUP
 
 # Create ignition files
 openshift-install create ignition-configs --dir ${installdir} 
@@ -49,7 +80,11 @@ az identity create -g ${RESOURCE_GROUP} -n ${INFRA_ID}-identity
 
 export PRINCIPAL_ID=`az identity show -g ${RESOURCE_GROUP} -n ${INFRA_ID}-identity --query principalId --out tsv`
 
+echo $PRINCIPAL_ID
+
 export RESOURCE_GROUP_ID=`az group show -g ${RESOURCE_GROUP} --query id --out tsv`
+
+echo $RESOURCE_GROUP_ID
 
 az role assignment create --assignee "${PRINCIPAL_ID}" --role 'Contributor' --scope "${RESOURCE_GROUP_ID}"
 
@@ -60,8 +95,10 @@ az storage account create -g ${RESOURCE_GROUP} --location ${AZURE_REGION} --name
 
 export ACCOUNT_KEY=`az storage account keys list -g ${RESOURCE_GROUP} --account-name ${CLUSTER_NAME}sa --query "[0].value" -o tsv`
 
+echo $ACCOUNT_KEY
 export VHD_URL=`curl -s https://raw.githubusercontent.com/openshift/installer/release-4.8/data/data/rhcos.json | jq -r .azure.url`
 
+echo $VHD_URL
 az storage container create --name vhd --account-name ${CLUSTER_NAME}sa --account-key ${ACCOUNT_KEY}
 
 az storage blob copy start --account-name ${CLUSTER_NAME}sa --account-key ${ACCOUNT_KEY} --destination-blob "rhcos.vhd" --destination-container vhd --source-uri "${VHD_URL}"
@@ -95,6 +132,7 @@ az network private-dns link vnet create -g ${RESOURCE_GROUP} -z ${CLUSTER_NAME}.
 # Creae deployment group for storage
 
 export VHD_BLOB_URL=`az storage blob url --account-name ${CLUSTER_NAME}sa --account-key ${ACCOUNT_KEY} -c vhd -n "rhcos.vhd" -o tsv`
+echo $VHD_BLOB_URL
 
 az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/02_storage.json" --parameters vhdBlobURL="${VHD_BLOB_URL}" --parameters baseName="${INFRA_ID}" 
 
@@ -103,26 +141,28 @@ az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/0
 
 
 export PUBLIC_IP=`az network public-ip list -g ${RESOURCE_GROUP} --query "[?name=='${INFRA_ID}-master-pip'] | [0].ipAddress" -o tsv`
+echo $PUBLIC_IP
 
 az network dns record-set a add-record -g ${BASE_DOMAIN_RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n api -a ${PUBLIC_IP} --ttl 60
 
 az network dns record-set a add-record -g ${BASE_DOMAIN_RESOURCE_GROUP} -z ${BASE_DOMAIN} -n api.${CLUSTER_NAME} -a ${PUBLIC_IP} --ttl 60
 
 export BOOTSTRAP_URL=`az storage blob url --account-name ${CLUSTER_NAME}sa --account-key ${ACCOUNT_KEY} -c "files" -n "bootstrap.ign" -o tsv`
+echo $BOOTSTRAP_URL
 export BOOTSTRAP_IGNITION=`jq -rcnM --arg v "3.2.0" --arg url ${BOOTSTRAP_URL} '{ignition:{version:$v,config:{replace:{source:$url}}}}' | base64 | tr -d '\n'`
-
+echo $BOOTSTRAP_IGNITION
 
 az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/04_bootstrap.json" --parameters bootstrapIgnition="${BOOTSTRAP_IGNITION}" --parameters sshKeyData="${SSH_KEY}" --parameters baseName="${INFRA_ID}" 
 
 # Deploy masters
 
 export MASTER_IGNITION=`cat ${installdir}/master.ign | base64 | tr -d '\n'`
-
+echo $MASTER_IGNITION | base64 -d
 az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/05_masters.json" --parameters masterIgnition="${MASTER_IGNITION}" --parameters sshKeyData="${SSH_KEY}" --parameters privateDNSZoneName="${CLUSTER_NAME}.${BASE_DOMAIN}" --parameters baseName="${INFRA_ID}" 
 
 # wait for bootstrap to complete
 
-./openshift-install wait-for bootstrap-complete --dir=${installdir} --log-level info 
+openshift-install wait-for bootstrap-complete --dir=${installdir} --log-level info 
 
 # remove boot strap resources
 
@@ -138,26 +178,26 @@ az network public-ip delete -g ${RESOURCE_GROUP} --name ${INFRA_ID}-bootstrap-ss
 # Deploy workers
 
 export WORKER_IGNITION=`cat ${installdir}/worker.ign | base64 | tr -d '\n'`
-
+echo $WORKER_IGNITION | base64 -d
 az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/06_workers.json" --parameters workerIgnition="${WORKER_IGNITION}" --parameters sshKeyData="${SSH_KEY}" --parameters baseName="${INFRA_ID}" 
 
 # sign certs for the worker nodes to join the cluster
 
 oc get csr
 
-oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' | xargs --no-run-if-empty oc adm certificate approve
+oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' | xargs oc adm certificate approve
 
 # update the dNS records
 
 export PUBLIC_IP_ROUTER=`oc -n openshift-ingress get service router-default --no-headers | awk '{print $4}'`
-
+echo $PUBLIC_IP_ROUTER
 az network dns record-set a add-record -g ${BASE_DOMAIN_RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n *.apps -a ${PUBLIC_IP_ROUTER} --ttl 300
 
-az network dns record-set a add-record -g ${BASE_DOMAIN_RESOURCE_GROUP} -z ${BASE_DOMAIN} -n *.apps.${CLUSTER_NAME} -a ${PUBLIC_IP_ROUTER} --ttl 300
+az network dns record-set a add-record -g ${BASE_DOMAIN_RESOURCE_GROUP} -z ${BASE_DOMAIN} -n '*.apps.${CLUSTER_NAME}' -a ${PUBLIC_IP_ROUTER} --ttl 300
 
-az network private-dns record-set a create -g ${RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n *.apps --ttl 300
+az network private-dns record-set a create -g ${RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n '*.apps' --ttl 300
 
-az network private-dns record-set a add-record -g ${RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n *.apps -a ${PUBLIC_IP_ROUTER}
+az network private-dns record-set a add-record -g ${RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n '*.apps' -a ${PUBLIC_IP_ROUTER}
 
 # Get all the routes
 
