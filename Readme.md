@@ -1,5 +1,22 @@
+# azure credentials
+az login
+
+az ad sp create-for-rbac --role Contributor --name azureupi
+
+# get appid from the previous command and replace here
+az role assignment create --role "User Access Administrator" --assignee-object-id $(az ad sp list --filter "appId eq '<appId>'" | jq '.[0].objectId' -r)
+
+az ad app permission add --id <appId> --api 00000002-0000-0000-c000-000000000000 --api-permissions 824c81eb-e3f8-4ee6-8f6d-de7f50d565b7=Role
+
+az ad app permission grant --id <appId> --api 00000002-0000-0000-c000-000000000000
+
+
+# Download installation program from cloud.redhat.com --> Clusters --> new cluster
+
+export installdir=azureocp
+
 # Create install config
-openshift-install create install-config --dir=azureocp
+openshift-install create install-config --dir=${installdir}
 
 export CLUSTER_NAME=ocpupi
 export AZURE_REGION=australiasoutheast
@@ -7,21 +24,21 @@ export SSH_KEY=`cat ~/.ssh/id_rsa`
 export BASE_DOMAIN=themallams.com
 export BASE_DOMAIN_RESOURCE_GROUP=aks-resource-group
 
-export KUBECONFIG=azureocp/auth/kubeconfig   
+export KUBECONFIG=${installdir}/auth/kubeconfig   
 
 # Create Kube manifest files
-openshift-install create manifests --dir=azureocp    
+openshift-install create manifests --dir=${installdir}    
 
-rm -rf azureocp/openshift/99_openshift-cluster-api_master-machines-*.yaml 
-rm -rf azureocp/openshift/99_openshift-cluster-api_worker-machineset-*.yaml
+rm -rf ${installdir}/openshift/99_openshift-cluster-api_master-machines-*.yaml 
+rm -rf ${installdir}/openshift/99_openshift-cluster-api_worker-machineset-*.yaml
 
 
-export INFRA_ID=`grep infrastructureName  azureocp/manifests/cluster-infrastructure-02-config.yml | awk -F ':' '{print $2}'`
+export INFRA_ID=`grep infrastructureName  ${installdir}/manifests/cluster-infrastructure-02-config.yml | awk -F ':' '{print $2}'`
 
-export RESOURCE_GROUP=`grep resourceGroupName  azureocp/manifests/cluster-infrastructure-02-config.yml | awk -F ':' '{print $2}'`
+export RESOURCE_GROUP=`grep resourceGroupName  ${installdir}/manifests/cluster-infrastructure-02-config.yml | awk -F ':' '{print $2}'`
 
 # Create ignition files
-openshift-install create ignition-configs --dir azureocp 
+openshift-install create ignition-configs --dir ${installdir} 
 
 # create Resource Group in azure to hold the resources
 az group create --name ${RESOURCE_GROUP} --location ${AZURE_REGION}
@@ -56,9 +73,11 @@ do
   echo $tstatus
 done
 
+# store ign files in azure blob
+
 az storage container create --name files --account-name ${CLUSTER_NAME}sa --account-key ${ACCOUNT_KEY} --public-access blob
 
-az storage blob upload --account-name ${CLUSTER_NAME}sa --account-key ${ACCOUNT_KEY} -c "files" -f "azureocp/bootstrap.ign" -n "bootstrap.ign"
+az storage blob upload --account-name ${CLUSTER_NAME}sa --account-key ${ACCOUNT_KEY} -c "files" -f "${installdir}/bootstrap.ign" -n "bootstrap.ign"
 
  # Create public and private dns zones
 
@@ -67,20 +86,20 @@ az network dns zone create -g ${BASE_DOMAIN_RESOURCE_GROUP} -n ${CLUSTER_NAME}.$
 az network private-dns zone create -g ${RESOURCE_GROUP} -n ${CLUSTER_NAME}.${BASE_DOMAIN}
 
 
-# Create VNET
+# Create VNETs 
 
-az deployment group create -g ${RESOURCE_GROUP} --template-file "azureocp/01_vnet.json" --parameters baseName="${INFRA_ID}"
+az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/01_vnet.json" --parameters baseName="${INFRA_ID}"
 
 az network private-dns link vnet create -g ${RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n ${INFRA_ID}-network-link -v "${INFRA_ID}-vnet" -e false
 
-# Creae deployment group
+# Creae deployment group for storage
 
 export VHD_BLOB_URL=`az storage blob url --account-name ${CLUSTER_NAME}sa --account-key ${ACCOUNT_KEY} -c vhd -n "rhcos.vhd" -o tsv`
 
-az deployment group create -g ${RESOURCE_GROUP} --template-file "azureocp/02_storage.json" --parameters vhdBlobURL="${VHD_BLOB_URL}" --parameters baseName="${INFRA_ID}" 
+az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/02_storage.json" --parameters vhdBlobURL="${VHD_BLOB_URL}" --parameters baseName="${INFRA_ID}" 
 
 # create networking and loadbalancing components
-az deployment group create -g ${RESOURCE_GROUP} --template-file "azureocp/03_infra.json" --parameters privateDNSZoneName="${CLUSTER_NAME}.${BASE_DOMAIN}" --parameters baseName="${INFRA_ID}" 
+az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/03_infra.json" --parameters privateDNSZoneName="${CLUSTER_NAME}.${BASE_DOMAIN}" --parameters baseName="${INFRA_ID}" 
 
 
 export PUBLIC_IP=`az network public-ip list -g ${RESOURCE_GROUP} --query "[?name=='${INFRA_ID}-master-pip'] | [0].ipAddress" -o tsv`
@@ -93,16 +112,17 @@ export BOOTSTRAP_URL=`az storage blob url --account-name ${CLUSTER_NAME}sa --acc
 export BOOTSTRAP_IGNITION=`jq -rcnM --arg v "3.2.0" --arg url ${BOOTSTRAP_URL} '{ignition:{version:$v,config:{replace:{source:$url}}}}' | base64 | tr -d '\n'`
 
 
-az deployment group create -g ${RESOURCE_GROUP} --template-file "azureocp/04_bootstrap.json" --parameters bootstrapIgnition="${BOOTSTRAP_IGNITION}" --parameters sshKeyData="${SSH_KEY}" --parameters baseName="${INFRA_ID}" 
+az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/04_bootstrap.json" --parameters bootstrapIgnition="${BOOTSTRAP_IGNITION}" --parameters sshKeyData="${SSH_KEY}" --parameters baseName="${INFRA_ID}" 
 
+# Deploy masters
 
-export MASTER_IGNITION=`cat azureocp/master.ign | base64 | tr -d '\n'`
+export MASTER_IGNITION=`cat ${installdir}/master.ign | base64 | tr -d '\n'`
 
-az deployment group create -g ${RESOURCE_GROUP} --template-file "azureocp/05_masters.json" --parameters masterIgnition="${MASTER_IGNITION}" --parameters sshKeyData="${SSH_KEY}" --parameters privateDNSZoneName="${CLUSTER_NAME}.${BASE_DOMAIN}" --parameters baseName="${INFRA_ID}" 
+az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/05_masters.json" --parameters masterIgnition="${MASTER_IGNITION}" --parameters sshKeyData="${SSH_KEY}" --parameters privateDNSZoneName="${CLUSTER_NAME}.${BASE_DOMAIN}" --parameters baseName="${INFRA_ID}" 
 
 # wait for bootstrap to complete
 
-./openshift-install wait-for bootstrap-complete --dir=azureocp --log-level info 
+./openshift-install wait-for bootstrap-complete --dir=${installdir} --log-level info 
 
 # remove boot strap resources
 
@@ -115,11 +135,11 @@ az network nic delete -g ${RESOURCE_GROUP} --name ${INFRA_ID}-bootstrap-nic --no
 az storage blob delete --account-key ${ACCOUNT_KEY} --account-name ${CLUSTER_NAME}sa --container-name files --name bootstrap.ign
 az network public-ip delete -g ${RESOURCE_GROUP} --name ${INFRA_ID}-bootstrap-ssh-pip
 
-# workers
+# Deploy workers
 
-export WORKER_IGNITION=`cat azureocp/worker.ign | base64 | tr -d '\n'`
+export WORKER_IGNITION=`cat ${installdir}/worker.ign | base64 | tr -d '\n'`
 
-az deployment group create -g ${RESOURCE_GROUP} --template-file "azureocp/06_workers.json" --parameters workerIgnition="${WORKER_IGNITION}" --parameters sshKeyData="${SSH_KEY}" --parameters baseName="${INFRA_ID}" 
+az deployment group create -g ${RESOURCE_GROUP} --template-file "${installdir}/06_workers.json" --parameters workerIgnition="${WORKER_IGNITION}" --parameters sshKeyData="${SSH_KEY}" --parameters baseName="${INFRA_ID}" 
 
 # sign certs for the worker nodes to join the cluster
 
@@ -127,7 +147,7 @@ oc get csr
 
 oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' | xargs --no-run-if-empty oc adm certificate approve
 
-oc -n openshift-ingress get service router-default
+# update the dNS records
 
 export PUBLIC_IP_ROUTER=`oc -n openshift-ingress get service router-default --no-headers | awk '{print $4}'`
 
@@ -139,11 +159,13 @@ az network private-dns record-set a create -g ${RESOURCE_GROUP} -z ${CLUSTER_NAM
 
 az network private-dns record-set a add-record -g ${RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n *.apps -a ${PUBLIC_IP_ROUTER}
 
+# Get all the routes
+
 oc get --all-namespaces -o jsonpath='{range .items[*]}{range .status.ingress[*]}{.host}{"\n"}{end}{end}' routes
 
-./openshift-install --dir=azureocp wait-for install-complete 
+./openshift-install --dir=${installdir} wait-for install-complete 
 
 
 # To destroy cluster
 
-openshift-install destroy cluster --dir azureocp --log-level=info
+openshift-install destroy cluster --dir ${installdir} --log-level=info
