@@ -1,9 +1,11 @@
 # Pre Requisites
 
-## CL's
-az
-yq
-jq
+## Command line utilities's
+
+az - Azure cli
+
+yq - Yaml processor
+
 openshift-install binary
 Download installation program from cloud.redhat.com --> Clusters --> new cluster
 
