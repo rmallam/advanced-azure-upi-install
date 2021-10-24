@@ -39,13 +39,16 @@ export SSH_KEY=`yq e '.sshKey' ${installdir}/install-config.yaml`
 export BASE_DOMAIN=`yq e '.baseDomain' ${installdir}/install-config.yaml`
 export BASE_DOMAIN_RESOURCE_GROUP=`yq e '.platform.azure.baseDomainResourceGroupName'  ${installdir}/install-config.yaml`
 
+
+echo $CLUSTER_NAME "\n"$AZURE_REGION "\n"$SSH_KEY "\n"$BASE_DOMAIN  "\n"$BASE_DOMAIN_RESOURCE_GROUP
 export KUBECONFIG=${installdir}/auth/kubeconfig   
 
 # Create Kube manifest files
 openshift-install create manifests --dir=${installdir}  
 
 # To enable ipsec with OVNKubernetes -- This cant be performed after cluster install
-cat <<EOF > manifests/cluster-network-03-config.yml
+
+cat <<EOF > ${installdir}/manifests/cluster-network-03-config.yml
 apiVersion: operator.openshift.io/v1
 kind: Network
 metadata:
@@ -193,7 +196,7 @@ oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{
 
 export PUBLIC_IP_ROUTER=`oc -n openshift-ingress get service router-default --no-headers | awk '{print $4}'`
 echo $PUBLIC_IP_ROUTER
-az network dns record-set a add-record -g ${BASE_DOMAIN_RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n *.apps -a ${PUBLIC_IP_ROUTER} --ttl 300
+az network dns record-set a add-record -g ${BASE_DOMAIN_RESOURCE_GROUP} -z ${CLUSTER_NAME}.${BASE_DOMAIN} -n '*.apps' -a ${PUBLIC_IP_ROUTER} --ttl 300
 
 az network dns record-set a add-record -g ${BASE_DOMAIN_RESOURCE_GROUP} -z ${BASE_DOMAIN} -n '*.apps.${CLUSTER_NAME}' -a ${PUBLIC_IP_ROUTER} --ttl 300
 
@@ -211,3 +214,39 @@ oc get --all-namespaces -o jsonpath='{range .items[*]}{range .status.ingress[*]}
 # To destroy cluster
 
 openshift-install destroy cluster --dir ${installdir} --log-level=info
+
+# enable etcd encryption
+
+oc edit apiserver
+
+# add this spec
+spec:
+  encryption:
+    type: aescbc 
+
+# verify encryption
+
+oc get openshiftapiserver -o=jsonpath='{range .items[0].status.conditions[?(@.type=="Encrypted")]}{.reason}{"\n"}{.message}{"\n"}'
+
+oc get kubeapiserver -o=jsonpath='{range .items[0].status.conditions[?(@.type=="Encrypted")]}{.reason}{"\n"}{.message}{"\n"}'
+
+oc get authentication.operator.openshift.io -o=jsonpath='{range .items[0].status.conditions[?(@.type=="Encrypted")]}{.reason}{"\n"}{.message}{"\n"}'
+
+
+# disable etcd encryption
+
+oc edit apiserver
+
+# add this spec
+spec:
+  encryption:
+    type: identity 
+
+# verify
+
+oc get openshiftapiserver -o=jsonpath='{range .items[0].status.conditions[?(@.type=="Encrypted")]}{.reason}{"\n"}{.message}{"\n"}'
+
+oc get kubeapiserver -o=jsonpath='{range .items[0].status.conditions[?(@.type=="Encrypted")]}{.reason}{"\n"}{.message}{"\n"}'
+
+oc get authentication.operator.openshift.io -o=jsonpath='{range .items[0].status.conditions[?(@.type=="Encrypted")]}{.reason}{"\n"}{.message}{"\n"}'
+
