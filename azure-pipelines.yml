@@ -7,7 +7,7 @@ trigger:
 - main
 
 pool:
-  vmImage: mymac
+  default: mymac
 
 steps:
 - script: echo Hello, world!
