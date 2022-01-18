@@ -16,6 +16,7 @@ steps:
     # PASSWORD="rakesh123"
     # expect -c "                                                            
     #spawn 
+    export GPG_TTY=$(tty)
     skopeo copy --sign-by rakesh@mallam.com docker://docker.io/openshift/observe docker://rakesh.azurecr.io/mallam/observe:1.0.2
     # expect \"Passphrase: \"
     # sleep 3
