@@ -6,8 +6,7 @@
 trigger:
 - main
 
-pool:
-  default: mymac
+pool: default
 
 steps:
 - script: echo Hello, world!
