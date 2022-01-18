@@ -14,9 +14,9 @@ steps:
     gpg --list-keys
     cd /Users/rakeshkumarmallam/imagesigning
     export PASSWORD="rakesh123"
-    export GPG_TTY=$(tty)
+    #export GPG_TTY=$(tty)
     expect -c "                                                            
-    spawn skopeo copy --sign-by rakesh@mallam.com docker://docker.io/openshift/observe docker://rakesh.azurecr.io/mallam/observe:1.0.2
+    spawn skopeo copy --sign-by rakesh@mallam.com docker://docker.io/mallam/rhsso:7.4-datagrid docker://rakesh.azurecr.io/mallam/rhsso:7.4-datagrid
     expect \"Passphrase: \"
     sleep 10
      send \"$PASSWORD\n\"
