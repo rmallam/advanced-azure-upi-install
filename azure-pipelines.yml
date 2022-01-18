@@ -16,7 +16,7 @@ steps:
     # export PASSWORD="rakesh123"
     export GPG_TTY=$(tty)
     # expect -c "                                                            
-    skopeo copy --sign-by rakesh@mallam.com docker://docker.io/mallam/my-centos:dev docker://rakesh.azurecr.io/mallam/my-centos:dev
+    skopeo copy --sign-by tester@rakesh.com docker://docker.io/ibmcom/ibm-operator-catalog:latest docker://rakesh.azurecr.io/mallam/httpd:1.0
     # expect \"Passphrase: \"
     # sleep 10
     # send \"$PASSWORD\n\"
