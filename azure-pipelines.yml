@@ -13,14 +13,13 @@ steps:
 - script: |
     gpg --list-keys
     cd /Users/rakeshkumarmallam/imagesigning
-    # PASSWORD="rakesh123"
-    # expect -c "                                                            
-    #spawn 
+    export PASSWORD="rakesh123"
     export GPG_TTY=$(tty)
-    skopeo copy --sign-by rakesh@mallam.com docker://docker.io/openshift/observe docker://rakesh.azurecr.io/mallam/observe:1.0.2
-    # expect \"Passphrase: \"
-    # sleep 3
-    # send   \"$PASSWORD\n\"
-    # interact
-    # "
+    expect -c "                                                            
+    spawn skopeo copy --sign-by rakesh@mallam.com docker://docker.io/openshift/observe docker://rakesh.azurecr.io/mallam/observe:1.0.2
+    expect \"Passphrase: \"
+    sleep 10
+     send \"$PASSWORD\n\"
+     interact
+     "
   displayName: 'Run a multi-line script'
