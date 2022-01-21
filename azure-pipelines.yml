@@ -1,7 +1,5 @@
 # Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
+
 
 trigger:
 - main
@@ -9,14 +7,24 @@ trigger:
 pool: default
 
 steps:
+- task: AzureKeyVault@2
+  inputs:
+    azureSubscription: 'Learn-as-you-go(7d0f610c-d5aa-403f-b3fe-e7644abe7d52)'
+    KeyVaultName: 'rakesh'
+    SecretsFilter: '*'
+    RunAsPreJob: true
 
+- task: CmdLine@2
+  inputs:
+    script: 'echo $(GPGkey)'
+    
 - script: |
     # gpg --list-keys
     # cd /Users/rakeshkumarmallam/imagesigning
     # export PASSWORD="rakesh123"
-    export GPG_TTY=$(tty)
+    #export GPG_TTY=$(tty)
     # expect -c "                                                            
-    skopeo copy --sign-by tester@rakesh.com docker-daemon:test:1.0.3 docker://rakesh.azurecr.io/mallam/httpd:1.1
+    #skopeo copy --sign-by tester@rakesh.com docker-daemon:test:1.0.3 docker://rakesh.azurecr.io/mallam/httpd:1.1
     # expect \"Passphrase: \"
     # sleep 10
     # send \"$PASSWORD\n\"
